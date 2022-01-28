@@ -8,6 +8,8 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
+import org.apache.flink.runtime.state.hashmap.HashMapStateBackend;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
@@ -18,6 +20,7 @@ import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.connectors.redis.RedisSink;
 import org.apache.flink.streaming.connectors.redis.common.config.FlinkJedisPoolConfig;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.serialization.StringDeserializer;
 
 import java.time.Duration;
@@ -36,6 +39,13 @@ public class App {
         //1. 获取flink 环境
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
+        //1.1 开启与配置 Checkpoint
+        env.enableCheckpointing(10000);     // 每 10s 开始一次 checkpoint
+        env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);// 设置模式为精确一次 (这是默认值)
+
+        //1.2 选择一个 State Backend
+        env.setStateBackend(new HashMapStateBackend()); //这里设置在jobmanager ，线上最好存储在rocksdb等
+
         //2. 设置kafka 数据源
 
         String topic = prop.getProperty("kafka.topic");
@@ -47,7 +57,8 @@ public class App {
                 .setGroupId(groupId)
                 .setTopics(Arrays.asList(topic))
                 .setDeserializer(KafkaRecordDeserializationSchema.valueOnly(StringDeserializer.class))
-                .setStartingOffsets(OffsetsInitializer.earliest())
+//                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST)) // 从消费组提交的位点开始消费，如果提交位点不存在，使用最早位点
                 .build();
         final DataStreamSource<String> stream = env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka Source");
 
